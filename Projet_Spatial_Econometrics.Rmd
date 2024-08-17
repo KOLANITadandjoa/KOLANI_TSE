@@ -57,7 +57,7 @@ library(stargazer)
 
 #### Definition du repertoire ####
 ```{r hide-results1, echo=FALSE, results='hide'}
-setwd("C:/Users/shenshixuan/Desktop/spatial analysis")
+setwd("C:/Users/kolanitadandjoa/Desktop/spatial analysis")
 ```
 
 # 1  DONNEES 
