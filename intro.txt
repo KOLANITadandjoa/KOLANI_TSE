@@ -2,5 +2,5 @@ Nom : KOLANI
 Prenom : Tadandjoa
 Age : 27 ans
 Sexe: Masculin
-Formation : Bac serie C option mathematiques, Licence Economie, Maitrise APE, Master 2 Economie quantitative en sante 
-Niveau : Intermediaire
+Formation : Bac serie C option mathematiques, Licence Economie, Maitrise Economie Appliquée, Master 1 et 2 Health Econometrics, Master 2 Statistics and Econometrics
+, Doctorat Health Econometrics
