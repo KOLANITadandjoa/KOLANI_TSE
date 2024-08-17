@@ -1,0 +1,1448 @@
+---
+title: "PROJET DE SPATIAL ECONOMETRICS"
+author: 
+  - name: "Tadandjoa KOLANI"
+  - name: "Shixuan SHEN" 
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+    number_sections: true 
+---
+
+```{r setup0, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)  
+```
+
+
+```{r,echo=F}
+# Entête 
+cat("FLUX MIGRATOIRE ENTRE PAYS DANS LE MONDE\n")
+cat("Master 2 Statistique et Économétrie\n")
+cat("Toulouse School of Economics\n")
+
+```
+
+#### Installation des packages #######"
+```{r setup1, include=FALSE}
+#install.packages(c("colorspace", "sf","spData","spdep","spatialreg","data.table","Matrix", "mapsf"))
+#install.packages(c("tidyverse","dplyr","spatialreg","ggplot2","corrplot"))
+#install.packages("spatialreg")
+#install.packages("missForest")
+#install.packages("tmap")
+#install.packages("mapsf")
+#install.packages("tidyverse")
+#install.packages("tmap")
+#install.packages("stargazer")
+
+library("colorspace")
+library("data.table")
+library("dplyr")
+library("ggplot2")
+library("Matrix")
+library("sf")
+library("spdep")
+library("spData")
+library("spdep")
+library("spatialreg")
+library("tidyverse")
+require("missForest")
+library(readxl)
+library(corrplot)
+library(mapsf)
+library(tmap)
+library(stargazer)
+
+```
+
+#### Definition du repertoire ####
+```{r hide-results1, echo=FALSE, results='hide'}
+setwd("C:/Users/shenshixuan/Desktop/spatial analysis")
+```
+
+# 1  DONNEES 
+
+## 1.1/ Donnees sur les flux migratoires
+```{r hide-results6, echo=FALSE, results='hide'}
+load("mig_data.RData")
+head(mig_data)
+table(mig_data$period)
+```
+
+###  1.1.1/  Method choosed and explanation
+
+Method choosed :min_close
+
+Explanation : We opt for the Demographic Account Minimization Closed (DAMC) method due to its ability to ensure non-negative migration flows while maintaining simplicity and reliability. By closing the system to new migration flows and relying solely on observed bilateral migrant stock data, DAMC provides a straightforward approach to estimating migration flows. This simplicity makes it easier to implement compared to other methods, such as DAMO, which allows for new migration flows and may introduce additional complexity. Additionally, DAMC's focus on minimizing the discrepancy between observed and estimated migrant stocks aligns well with our objective of deriving plausible and consistent migration flow estimates. Therefore, given its pragmatic approach and suitability for our study's goals, DAMC emerges as the preferred choice.
+
+### 1.1.2/ Interpretation of the corresponding map
+
+The trends in migration flows between countries vary depending on the level of development. Migration flows are generally weak between less developed countries, while moderate levels are observed between developed countries. Substantial migrations occur from less developed to developed countries, although there are also flows in the opposite direction, albeit less pronounced. Emigration rates tend to be higher for more developed countries, with notable concentrations of migration flows observed between the United States and certain Asian countries like India and China. Similar observations are made between Asia and Europe, although incoming flows to Europe are less prominent. Conversely, incoming flows from Africa are generally low, except for those to the United States, which are higher. Intra-regional migrations are observed in South America, as well as migrations from South America to the United States.
+
+Overall, while similarities exist in outbound flow trends among some estimation methods (Drop Negative, Reverse Negative, and Minimization Open), significant differences emerge, especially when comparing Minimization Close and Pseudo-Bayesian approaches, with Migration Rate and the first three methods lying between them.
+
+
+## 1.2/  Donnees de contours,
+ 
+ Import the data and transform the Coordinate Reference System
+```{r hide-results2, echo=FALSE, results='hide'}
+url <- "C:/Users/kolanitadandjoa/Desktop/spatial analysis/world-administrative-boundaries.geojson"
+world_boundaries <- st_read(url)
+world_boundaries <- st_transform(world_boundaries, crs = "ESRI:54030")
+head(world_boundaries)
+world_boundaries <- st_read(url)
+world_boundaries <- st_transform(world_boundaries, crs = "ESRI:54030")
+head(world_boundaries)
+```
+
+## 1.3/ Variables explicatives au niveau national
+```{r, echo = FALSE}
+load("covariates.RData")
+# Importation de variables supplementaires 
+variable_sup <- read_excel("C:/Users/kolanitadandjoa/Desktop/spatial analysis/variable_sup.xlsx")
+head(variable_sup)
+str(variable_sup)
+variable_sup$CountryName = NULL
+```
+
+## Ajout les variables sup aux covariables 
+```{r, echo = FALSE}
+my_covariates<- left_join(my_covariates, variable_sup, by = "CountryCode")
+
+
+nom_vars <- c("deflactor", "lifeexp", "dummyEarthquake", "population",
+              "dummyStorm", "GDPpercapita_UN", "FD", "conflictpercapita",
+              "politicalstability", "landlocked", "vulnerability",
+              "Events", "Fatalities", "Overall_Score", "Labor_Freedom")
+my_covariates[, nom_vars] <- missForest(my_covariates[, nom_vars])$ximp
+
+summary(my_covariates)
+my_covariates$Year = NULL
+```
+
+## 1.4/ Variables explicatives au niveau des paires de pays 
+```{r, echo = FALSE}
+load("pairs.RData")
+```
+
+# 2/  Taux d'emigration et d'immigration par pays
+
+
+```{r, echo = FALSE}
+## structure des donnees mig_data
+str(mig_data)
+```
+
+## 2.1/ Calcul de flux sortants et flux entrants 
+
+### 2.1.a/  Total des flux sortants (emigration) par pays d'origine
+```{r, echo = FALSE}
+total_emigration <- mig_data %>%
+  group_by(origin) %>%
+  summarize(outflow = sum(min_close))
+```
+
+### 2.1.a/  Total des flux entrants (immigration) par pays de destination
+```{r, echo = FALSE}
+total_immigration <- mig_data %>%
+  group_by(dest) %>%
+  summarize(inflow = sum(min_close))
+```
+
+## 2.2/ Fusion des donnees 
+
+### 2.2.a/ Renommer les colonnes en CountryCode
+```{r, echo = FALSE}
+total_emigration <-total_emigration%>%
+  rename("CountryCode" = "origin")
+total_immigration <-total_immigration%>%
+  rename("CountryCode" = "dest")
+
+```
+
+### 2.2.b/ Fusionner les totaux des flux entrants et sortants avec les variables explicatives au niveau du pays
+```{r, echo = FALSE}
+merged_data <- left_join(total_emigration, total_immigration, by = "CountryCode")
+merged_data <- left_join(my_covariates, merged_data, by = "CountryCode")
+```
+
+### 2.2.c/ Fusionner avec les donnees de contour
+```{r, echo=FALSE, results='hide'}
+str(world_boundaries) # iso3
+str(merged_data) # CountryCode
+
+world <- left_join(world_boundaries, merged_data, by = c("iso3" = "CountryCode"))
+
+colnames(world)
+```
+
+##  2.3/ Verification for duplication 
+
+```{r hide-results4, echo=FALSE, results='hide'}
+summary(world)
+world <- world[!is.na(world$inflow), ]
+
+summary(world) 
+duplicated_iso3 <- duplicated(world$iso3)
+if (any(duplicated_iso3)) {
+  world <- world[!duplicated_iso3, ]
+}
+
+distinct_iso3 <- n_distinct(world$iso3)
+print(distinct_iso3)   # ok parfait, nous avons les 192!
+
+world <- world[, c("iso3", "outflow", "inflow", "CountryName", "deflactor", "lifeexp", "GDPpercapita_UN",
+                   "population", "FD", "politicalstability", "landlocked", "dummyEarthquake", "dummyStorm",
+                   "dummyFlood", "Events", "Fatalities", "conflictpercapita", "vulnerability", "prec_3days",
+                   "heat_wave", "dry_wave","Overall_Score", "Labor_Freedom", "geometry")]
+
+world
+
+
+```
+
+
+## 2.4/Create the dependent variables emigrates and immigrates，net
+
+```{r, echo = FALSE}
+# variable emigrates
+world$emigrates <- world$outflow / world$population
+
+# variable immigrates 
+world$immigrates <- world$inflow / world$population
+
+#  variable net
+world$net <- world$immigrates - world$emigrates
+```
+
+## 2.5 / Analyse de corrélation entre les variables
+```{r, echo = FALSE}
+
+summary(world)
+
+colnames(world)
+
+# S?lection des variables pour l'analyse de corr?lation
+selected_vars <- c("lifeexp", "GDPpercapita_UN", "deflactor", "population", "FD", "politicalstability", "landlocked", "Events", "Fatalities", "conflictpercapita", 
+                   "vulnerability", "prec_3days", "heat_wave", "dry_wave", "Overall_Score", "Labor_Freedom", 
+                   "emigrates", "immigrates", "net")
+
+data_corr <- world[, selected_vars]
+data_corr$geometry <- NULL
+correlation_matrix <- cor(data_corr, use = "complete.obs")
+
+#
+print(correlation_matrix)
+
+par(mfrow = c(1, 1))
+# graphique de la matrice de corr?lation
+corrplot(correlation_matrix, method = "circle", 
+         col = colorRampPalette(c("blue", "white", "red"))(20),
+         type = "upper", order = "hclust",
+         addCoefasPercent = TRUE,
+         tl.col = "black", tl.srt = 45,
+         addrect = 5)
+```
+
+
+Note:The "emigrates" variable shows a predominantly negative correlation with most of the other variables, as indicated by the blue squares and the negative correlation coefficients.
+The "immigrates" variable, on the other hand, shows mostly positive correlations with the other variables, as indicated by the red squares and the positive correlation coefficients.
+This suggests that the factors influencing emigration might be negatively associated with those variables, while the factors influencing immigration are positively associated. 
+For instance, higher GDP per capita, better life expectancy, and political stability might be attracting immigrants, while higher rates of fatalities, conflict per capita, and perhaps vulnerability might be pushing emigrants to leave.
+
+## 2.6/ Map of emigrates and immigrates
+
+Represent the two dependent variables emigrates and immigrates on a map and interpret the graphic.
+
+```{r}
+par(mfrow = c(2, 2))
+
+mf_map(
+  x = world, var = "emigrates", type = "choro",
+  pal = "Red-Purple",  
+  breaks = "jenks",   
+  nbreaks = 8,         
+  leg_title = "Emigrates", 
+  leg_val_rnd = 3     
+)
+
+mf_map(
+  x = world, var = "immigrates", type = "choro",
+  pal = "Red-Purple", 
+  breaks = "jenks",   
+  nbreaks = 8,        
+  leg_title = "Immigrates",  
+  leg_val_rnd = 3     
+)
+
+mf_map(
+  x = world, var = "net", type = "choro",
+  pal = "Red-Purple",  
+  breaks = "jenks",    
+  nbreaks = 8,         
+  leg_title = "Net",  
+  leg_val_rnd = 3     
+)
+```
+Note:AS for the rate of emigration: The darker regions may encompass certain countries in Africa, Latin America, and Asia. These countries might have higher rates of population outflow.
+
+Immigration: The darker regions appear to be mainly in North America and Europe. This indicates higher rates of population inflow in these areas.
+
+Net Migration: The darker regions may be concentrated in certain parts of North America and possibly Australia. This suggests that the net migration rates in these countries are positive, meaning that the inflow of people exceeds the outflow
+
+## 2.7/ Spatial weight matrix and neighborhood links on a map
+
+Define one spatial weight matrix and motivate your choice, then represent the neighborhood links on a map.
+```{r}
+par(mfrow =c(1,2))
+
+# contiguity-based spatial weight matrix
+world_geo <- st_geometry(world)
+
+# Verification des regions deconnectees dans ensemble de donnees world
+coords <- st_coordinates(st_centroid(world_geo))
+queen_nb <- poly2nb(world_geo, queen = TRUE)
+plot(world_geo)
+plot(queen_nb, coords, add = TRUE)
+
+addnbs <- function(world_geo, min_neighbours = 2) {
+  queen_nb <- poly2nb(world_geo, queen = TRUE)
+  count <- card(queen_nb)
+  if (all(count >= min_neighbours)) {
+    return(queen_nb)
+  }
+  # obtenir les indices des voisins les plus proches, en utilisant les centro?des :
+  nnbs <- knearneigh(st_coordinates(st_centroid(world_geo)), k = min_neighbours + 1)$nn
+  no_edges_from <- which(count < min_neighbours)
+  for (i in no_edges_from) {
+    queen_nb[[i]] <- nnbs[i, 2:(min_neighbours + 1)]
+  }
+  return(queen_nb)
+}
+
+# Ajout des voisins manquants ? l'ensemble de donn?es world
+world_nb <- addnbs(world_geo)
+world_nb
+# Verification
+plot(world_geo)
+plot(world_nb, coords, add = TRUE, col = "blue")
+
+#  list of weights
+world_listw <- nb2listw(world_nb, style = "W")
+#  object matrix
+W <- listw2mat(world_listw) 
+```
+Note:
+I have used the "queen criterion" to construct a spatial weight matrix based on adjacency. This means that if polygons share an edge or a vertex, they are considered adjacent, allowing for a more comprehensive capture of spatial relationships between regions. Additionally, I have defined an "addnbs" function to add neighbors to regions with fewer than the minimum number (min_neighbours=2) of neighbors. This ensures that each region has at least a certain number of neighbors, addressing the potential issue of isolated or disconnected regions.
+
+### 2.8/  Moran plot
+
+ 
+```{r}
+# Diagramme de dispersion de Moran
+par(mfrow = c(2,2))
+
+W_world <- nb2listw(world_nb)
+emigrates <- world$emigrates
+immigrates <- world$immigrates
+net <- world$net
+
+
+
+moran.plot(emigrates,W_world, labels = world$CountryName, col = c("red", "yellow", "blue", "pink"))
+moran.plot(immigrates,W_world, labels = world$CountryName, col = c("red", "yellow", "blue", "pink"))
+moran.plot(net,W_world, labels = world$CountryName, col = c("red", "yellow", "blue", "pink"))
+
+```
+Note:
+The emigration rates of various countries exhibit a weak positive spatial autocorrelation, but this needs statistical testing for verification. There are some outliers, such as "Polynesia," indicating significant differences in emigration rates compared to its neighboring countries. 
+The immigration rates of countries show positive spatial autocorrelation, suggesting that certain countries have significantly similar immigration rates to their neighbors, with "Bahrain" and "Qatar" having higher immigration rates compared to other countries. 
+The net migration rates of countries also exhibit positive spatial autocorrelation, with most countries having net migration rates close to zero, distributed around the center of the graph.
+
+## 2.9/ Test de Moran
+
+
+```{r}
+moran_emigrates <- moran.test(world$emigrates, listw = world_listw)
+moran_emigrates
+moran_immigrates <- moran.test(world$immigrates, listw = world_listw)
+moran_immigrates
+moran_net <- moran.test(world$net, listw = world_listw)
+moran_net
+```
+
+Note:
+In all three cases, the Moran I statistic is positive, indicating positive spatial autocorrelation.
+The p-values associated with each test are all very small(<0.05), indicating that the observed spatial autocorrelation is statistically significant. Therefore, we reject the null hypothesis that there is no spatial autocorrelation, and accept the alternative hypothesis that there is positive spatial autocorrelation.
+these results suggest that there is a spatial pattern in migration rates across countries, where neighboring countries tend to exhibit similar migration patterns.
+
+## 2.10/ Analyse du modèle OLS
+
+Estimate an ols for the two dependent variables,Is there spatial autocorrelation in the residuals? Where are located the countries with the most important spatial autocorrelation in the residuals?
+
+```{r}
+# OLS model for emigrates
+ols_emigrates <- lm(emigrates ~ lifeexp + GDPpercapita_UN + deflactor + population + FD + politicalstability + 
+                      landlocked + Events + Fatalities + conflictpercapita + vulnerability + prec_3days + heat_wave + 
+                      dry_wave + Labor_Freedom, data = world)
+
+summary(ols_emigrates)
+
+# OLS model for immigrates
+ols_immigrates <- lm(immigrates ~  GDPpercapita_UN + deflactor + population + FD + politicalstability + 
+                       landlocked + Events + Fatalities + conflictpercapita + vulnerability + prec_3days + heat_wave + 
+                       dry_wave + Labor_Freedom, data = world)
+
+summary(ols_immigrates)
+
+# Moran test for spatial autocorrelation in residuals
+moran_test_emigrates <- moran.test(residuals(ols_emigrates), listw = world_listw)
+moran_test_immigrates <- moran.test(residuals(ols_immigrates), listw = world_listw)
+
+print("Moran's I test results for residuals of emigrates model:")
+print(moran_test_emigrates)
+print("Moran's I test results for residuals of immigrates model:")
+print(moran_test_immigrates)
+
+# Create Moran plots for residuals
+par(mfrow = c(1, 2))
+
+# Moran plot for residuals of immigrates model
+moran.plot(residuals(ols_immigrates), listw = world_listw, labels = world$CountryName,
+           main = "Moran Scatterplot - Residuals (Immigrates)")
+
+```
+Note:
+The residuals of the OLS immigration model exhibit significant positive spatial autocorrelation, indicating that the model has not captured all spatial effects. Therefore, there is a need to adjust the model. For instance, we could consider using a Spatial Lag Model or a Spatial Error Model to control for spatial autocorrelation.
+
+countries like Emirates, Arab, and Gabon show large positive residuals and large positive spatially lagged residuals, which is indicative of positive spatial autocorrelation.
+
+### LISA cluster map for residuals of immigrates model
+```{r}
+####### LISA cluster map for residuals of immigrates model
+
+library(tmap)
+# Mapping the local Moran's I
+localMI <- localmoran(residuals(ols_immigrates), listw = world_listw)
+dim(localMI)
+summary(localMI)
+world.localMI <- cbind(world,localMI)
+localMI.map <- tm_shape(world.localMI) +
+  tm_fill(col = "Ii", 
+          style = "pretty", 
+          title = "local moran statistics") +
+  tm_borders(alpha = 0.5)
+
+# Mapping local Moran's I p-values
+pvalue.map <- tm_shape(world.localMI) +
+  tm_fill(col = "Pr.z....E.Ii..", 
+          breaks=c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+          palette="-Blues", 
+          title = "local Moran's I p-values") +
+  tm_borders(alpha = 0.5)
+
+# Mapping both local Moran's I values and p-values
+tmap_arrange(localMI.map, pvalue.map, asp=1, ncol=2)
+
+
+## Prepare te Lisa cluster Map
+# Define the quadrants based on Moran's I and significance
+quadrant <- rep(NA, nrow(localMI))
+DV <- residuals(ols_immigrates) - mean(residuals(ols_immigrates))
+C_mI <- localMI[,1] - mean(localMI[,1])
+signif <- 0.05
+
+quadrant[DV > 0 & C_mI > 0] <- "high-high"
+quadrant[DV < 0 & C_mI < 0] <- "low-low"
+quadrant[DV < 0 & C_mI > 0] <- "low-high"
+quadrant[DV > 0 & C_mI < 0] <- "high-low"
+quadrant[localMI[,5] > signif] <- "insignificant"
+
+# Build the LISA map with significance
+world.localMI$quadrant <- factor(quadrant, levels = c("low-low", "high-low", "low-high", "high-high", "insignificant"))
+colors <- c("#d7191c", "#fdae61", "#2c7bb6", "#abd9e9", "#ffffff")  # Red, Orange, Blue, Light Blue, White
+clusters <- c("Low-Low", "High-Low", "Low-High", "High-High", "Insignificant")
+
+# Create LISA cluster map with significance
+
+lisa_map_sig <- tm_shape(world.localMI) +
+  tm_fill(col = "quadrant", style = "cat", palette = colors, labels = clusters) +
+  tm_view(set.zoom.limits = c(11, 17)) +
+  tm_borders(alpha = 0.5)
+
+
+# Define the quadrants based on Moran's I and without significance
+quadrant <- rep(NA, nrow(localMI))
+DV <- residuals(ols_immigrates) - mean(residuals(ols_immigrates))
+C_mI <- localMI[,1] - mean(localMI[,1])
+
+quadrant[DV > 0 & C_mI > 0] <- "high-high"
+quadrant[DV < 0 & C_mI < 0] <- "low-low"
+quadrant[DV < 0 & C_mI > 0] <- "low-high"
+quadrant[DV > 0 & C_mI < 0] <- "high-low"
+
+
+# Build the LISA map without significance
+world.localMI$quadrant <- factor(quadrant, levels = c("low-low", "high-low", "low-high", "high-high"))
+colors <- c("#d7191c", "#fdae61", "#2c7bb6", "#abd9e9")  # Red, Orange, Blue, Light Blue
+clusters <- c("Low-Low", "High-Low", "Low-High", "High-High")
+
+# Create LISA cluster map without significance
+lisa_map_nonsig <- tm_shape(world.localMI) +
+  tm_fill(col = "quadrant", style = "cat", palette = colors, labels = clusters) +
+  tm_view(set.zoom.limits = c(11, 17)) +
+  tm_borders(alpha = 0.5)
+
+# Plot both maps
+par(mfrow = c(2, 1))
+lisa_map_sig 
+lisa_map_nonsig
+
+```
+Note:
+while many areas exhibit non-significant spatial autocorrelation, our focus will be on those instances that demonstrate statistical significance. The graph indicates that the majority of countries exhibit a 'High-High' pattern in terms of immigration rates, suggesting a country has a high rate of immigration and so do its neighbors, indicating positive spatial autocorrelation. Nevertheless, a subset of countries displays 'Low-High' and 'High-Low' scenarios, representing local spatial heterogeneities.
+
+
+```{r}
+###### LISA MAP FOR EMIGRATES
+
+# Calculate local Moran's I
+localMI <- localmoran(residuals(ols_emigrates), listw = world_listw)
+
+# Create a dataframe combining world data and local Moran's I
+world.localMI <- cbind(world, localMI)
+
+# Mapping the local Moran's I
+localMI.map <- tm_shape(world.localMI) +
+  tm_fill(col = "Ii", 
+          style = "pretty", 
+          title = "Local Moran Statistics") +
+  tm_borders(alpha = 0.5)
+
+# Mapping local Moran's I p-values
+pvalue.map <- tm_shape(world.localMI) +
+  tm_fill(col = "Pr.z....E.Ii..", 
+          breaks=c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+          palette="-Blues", 
+          title = "Local Moran's I p-values") +
+  tm_borders(alpha = 0.5)
+
+# Mapping both local Moran's I values and p-values
+tmap_arrange(localMI.map, pvalue.map, asp=1, ncol=2)
+
+## Prepare the LISA cluster Map
+# Define the quadrants based on Moran's I and significance
+quadrant <- rep(NA, nrow(localMI))
+DV <- residuals(ols_emigrates) - mean(residuals(ols_emigrates))
+C_mI <- localMI[,1] - mean(localMI[,1])
+signif <- 0.05
+
+quadrant[DV > 0 & C_mI > 0] <- "high-high"
+quadrant[DV < 0 & C_mI < 0] <- "low-low"
+quadrant[DV < 0 & C_mI > 0] <- "low-high"
+quadrant[DV > 0 & C_mI < 0] <- "high-low"
+quadrant[localMI[,5] > signif] <- "insignificant"
+
+# Build the LISA map with significance
+world.localMI$quadrant <- factor(quadrant, levels = c("low-low", "high-low", "low-high", "high-high", "insignificant"))
+colors <- c("#d7191c", "#fdae61", "#2c7bb6", "#abd9e9", "#ffffff")  # Red, Orange, Blue, Light Blue, White
+clusters <- c("Low-Low", "High-Low", "Low-High", "High-High", "Insignificant")
+
+# Create LISA cluster map with significance
+lisa_map_sig <- tm_shape(world.localMI) +
+  tm_fill(col = "quadrant", style = "cat", palette = colors, labels = clusters) +
+  tm_view(set.zoom.limits = c(11, 17)) +
+  tm_borders(alpha = 0.5)
+
+# Define the quadrants based on Moran's I without significance
+quadrant <- rep(NA, nrow(localMI))
+DV <- residuals(ols_emigrates) - mean(residuals(ols_emigrates))
+C_mI <- localMI[,1] - mean(localMI[,1])
+
+quadrant[DV > 0 & C_mI > 0] <- "high-high"
+quadrant[DV < 0 & C_mI < 0] <- "low-low"
+quadrant[DV < 0 & C_mI > 0] <- "low-high"
+quadrant[DV > 0 & C_mI < 0] <- "high-low"
+
+# Build the LISA map without significance
+world.localMI$quadrant <- factor(quadrant, levels = c("low-low", "high-low", "low-high", "high-high"))
+colors <- c("#d7191c", "#fdae61", "#2c7bb6", "#abd9e9")  # Red, Orange, Blue, Light Blue
+clusters <- c("Low-Low", "High-Low", "Low-High", "High-High")
+
+# Create LISA cluster map without significance
+lisa_map_nonsig <- tm_shape(world.localMI) +
+  tm_fill(col = "quadrant", style = "cat", palette = colors, labels = clusters) +
+  tm_view(set.zoom.limits = c(11, 17)) +
+  tm_borders(alpha = 0.5)
+
+# Plot both maps
+par(mfrow = c(2, 1))
+lisa_map_sig
+lisa_map_nonsig
+
+
+```
+Note:
+
+Similar observations;
+positive spatial autocorrelation. Nevertheless, a subset of countries displays 'Low-High' and 'High-Low' scenarios, representing local spatial heterogeneities.
+
+## 2. 11/ Spatial models
+
+### 2.11.1/  Variable selection based on correlation analysis and economic importance
+
+Correlation Analysis
+We have listed some potential multicollinearity issues (variables with correlation coefficients > 0.6, as per definition)
+
+labor_freedom and overall_score
+overall_score, lifeexp and GDPpercapita_UN, FD, and vulnerability
+vulnerability and overall_score, lifeexp, GDP, and FD
+Fatalities, Events, and conflictpercapita
+Events, political stability, and fatalities
+lifeexp, FD, and DP
+
+To check if this strong correlation was associated with an almost perfect collinearity between two variables, we based ourselves on the approach of verifying the R2 of the simple regression model (between two suspected variables). The final selection of variables for the econometric models are presented below.
+
+### 2.11.2/ Possible multicollinearities: final variable selection et ols estimation
+
+labor_freedom, GDP, FD, landlocked, dry_wave, heat_wave, political stability, conflictpercapita, prec_3days
+
+```{r}
+# ols model for emigrates
+ols_emigrates <- lm(emigrates ~ deflactor + FD + politicalstability + 
+                      landlocked + conflictpercapita + prec_3days + heat_wave + 
+                      dry_wave + Labor_Freedom, data = world)
+
+summary(ols_emigrates)
+
+# ols model for immigrates
+ols_immigrates <- lm(immigrates ~ deflactor + FD + politicalstability + 
+                       landlocked + conflictpercapita + prec_3days + heat_wave + 
+                       dry_wave + Labor_Freedom, data = world)
+
+summary(ols_immigrates)
+```
+
+### 2.11.3/ Spatial models
+
+#### MODELS SLX
+
+```{r}
+# Calcul des lags 
+world$GDPpercapita_UN_lag <- lag.listw(world_listw, world$GDPpercapita_UN)
+world$deflactor_lag <- lag.listw(world_listw, world$deflactor)
+world$population_lag <- lag.listw(world_listw, world$population)
+world$FD_lag <- lag.listw(world_listw, world$FD)
+world$politicalstability_lag <- lag.listw(world_listw, world$politicalstability)
+world$landlocked_lag <- lag.listw(world_listw, world$landlocked)
+world$conflictpercapita_lag <- lag.listw(world_listw, world$conflictpercapita)
+world$prec_3days_lag <- lag.listw(world_listw, world$prec_3days)
+world$heat_wave_lag <- lag.listw(world_listw, world$heat_wave)
+world$dry_wave_lag <- lag.listw(world_listw, world$dry_wave)
+world$Labor_Freedom_lag <- lag.listw(world_listw, world$Labor_Freedom)
+
+# Modèle emigrates
+slx_emigrates <- lm(emigrates ~ deflactor+ FD + politicalstability + 
+                      landlocked + conflictpercapita + prec_3days + heat_wave + 
+                      dry_wave + Labor_Freedom + deflactor_lag + 
+                      FD_lag + politicalstability_lag + landlocked_lag + 
+                      conflictpercapita_lag + prec_3days_lag + heat_wave_lag + 
+                      dry_wave_lag + Labor_Freedom_lag, data = world)
+
+summary(slx_emigrates)
+
+# Modèle immigrates
+slx_immigrates <- lm(immigrates ~ deflactor+ FD + politicalstability + 
+                      landlocked + conflictpercapita + prec_3days + heat_wave + 
+                      dry_wave + Labor_Freedom + deflactor_lag + 
+                       FD_lag + politicalstability_lag + landlocked_lag + 
+                      conflictpercapita_lag + prec_3days_lag + heat_wave_lag + 
+                      dry_wave_lag + Labor_Freedom_lag, data = world)
+
+summary(slx_immigrates)
+
+```
+
+
+#### MODELS SEM 
+```{r}
+ev <- eigenw(world_listw)
+# emigrates
+sem_emigrates <- errorsarlm(emigrates ~deflactor + FD + politicalstability + 
+                              landlocked + conflictpercapita + prec_3days + heat_wave + 
+                              dry_wave + Labor_Freedom, data = world,world_listw,control=list(pre_eig=ev))
+
+summary(sem_emigrates)
+
+
+# immigrates
+sem_immigrates <- errorsarlm(immigrates ~deflactor + FD + politicalstability + 
+                              landlocked + conflictpercapita + prec_3days + heat_wave + 
+                              dry_wave + Labor_Freedom, data = world,world_listw,control=list(pre_eig=ev))
+
+summary(sem_immigrates)
+```
+
+
+#### MODELS LAG
+```{r}
+# emigrates
+lag_emigrates <- lagsarlm(emigrates ~ deflactor + FD + politicalstability + 
+                            landlocked + conflictpercapita + prec_3days + heat_wave + 
+                            dry_wave + Labor_Freedom, data = world,world_listw,control=list(pre_eig=ev))
+summary(lag_emigrates) 
+
+
+# immigrates
+lag_immigrates <- lagsarlm(immigrates ~ deflactor + FD + politicalstability + 
+                             landlocked + conflictpercapita + prec_3days + heat_wave + 
+                             dry_wave + Labor_Freedom, data = world,world_listw,control=list(pre_eig=ev))
+summary(lag_immigrates)  
+
+```
+Note:not Significant rho for emigrates.
+However,  significant of rho for immigrates at 5% level.
+
+### MODELS SDM
+```{r}
+# emigrates
+sdm_emigrates <- lagsarlm(emigrates ~ deflactor + FD + politicalstability + 
+                            landlocked + conflictpercapita + prec_3days + heat_wave + 
+                            dry_wave + Labor_Freedom, data = world, listw = world_listw, control=list(pre_eig=ev),Durbin = TRUE)
+
+summary(sdm_emigrates)
+
+# immigrates
+sdm_immigrates <- lagsarlm(immigrates ~ deflactor + FD + politicalstability + 
+                             landlocked + conflictpercapita + prec_3days + heat_wave + 
+                             dry_wave + Labor_Freedom, data = world, listw = world_listw, control=list(pre_eig=ev),Durbin = TRUE)
+
+summary(sdm_immigrates) 
+
+```
+
+
+#### Testing different models
+```{r}
+res_test <- lm.LMtests(ols_immigrates, world_listw, test = "all")
+summary(res_test)  # on retient le modele OLS
+res_test <- lm.LMtests(ols_emigrates, world_listw, test = "all")
+summary(res_test) # on retient SEM
+
+```
+Note:
+For the immigration rate model (`immigrates`), the statistical values of RSerr and RSlag are highly significant (p-values are far less than 0.01), indicating the presence of strong spatial autocorrelation. This means that the model may need to consider spatial error or spatial lag to more accurately describe the data.
+
+For emigration rate data, the results did not show significant spatial autocorrelation, indicating that the ols model may be sufficient.
+
+#### testing based on AIC
+```{r}
+c(ols = AIC(ols_emigrates), slx = AIC(slx_emigrates), sem = AIC(sem_emigrates) , lag = AIC(lag_emigrates),
+  sdm = AIC(sdm_emigrates))  # le meilleur selon AIC est ols
+
+c(ols = AIC(ols_immigrates), slx = AIC(slx_immigrates), sem = AIC(sem_immigrates) , lag = AIC(lag_immigrates),
+  sdm = AIC(sdm_immigrates))  # le meilleur selon AIC est SEM pour immigrates
+
+```
+
+#### Impacts directs et indirects
+```{r}
+## Tableau des impacts directs et indirects
+
+W_sparse <- as(W, "sparseMatrix")
+trMatc <- trW(W_sparse, type = "mult")
+
+trMC <- trW(W_sparse, type="MC") 
+set.seed(1)
+
+impact_emigrates <- spatialreg::impacts(lag_emigrates, tr = trMatc)
+print(impact_emigrates)
+impact_immigrates <- spatialreg::impacts(lag_immigrates, tr = trMatc)
+print(impact_immigrates)
+
+```
+Note:
+The direct impacts are always greater than indirect impacts, it indicates that the variable has a stronger influence on migration flows within the region itself, while its effect on neighboring areas is relatively smaller.
+
+## 2.12 ESTIMATION SUR LA PERIODE 1990-1995
+```{r}
+
+head(mig_data)
+table(mig_data$period)
+
+## sous ?chantillon de la p?riode
+mig_data2 <- subset(mig_data, period == "1990-1995")
+
+###  Calcul de fulx sortants et flux entrants 
+
+# Total des flux sortants (?migration) par pays d'origine
+total_emigration <- mig_data2 %>%
+  group_by(origin) %>%
+  summarize(outflow = sum(min_close))
+
+# Total des flux entrants (immigration) par pays de destination
+total_immigration <- mig_data2 %>%
+  group_by(dest) %>%
+  summarize(inflow = sum(min_close))
+
+# Renommer les colonnes en CountryCode
+
+total_emigration <-total_emigration%>%
+  rename("CountryCode" = "origin")
+total_immigration <-total_immigration%>%
+  rename("CountryCode" = "dest")
+
+# Fusionner les totaux des flux entrants et sortants avec les variables explicatives au niveau du pays
+
+merged_data <- left_join(total_emigration, total_immigration, by = "CountryCode")
+merged_data <- left_join(my_covariates, merged_data, by = "CountryCode")
+# Fusionner avec les donn?es de contour
+str(world_boundaries) # iso3
+str(merged_data) # CountryCode
+
+world <- left_join(world_boundaries, merged_data, by = c("iso3" = "CountryCode"))
+
+
+##  
+summary(world)
+
+world <- world[!is.na(world$inflow), ]
+
+summary(world) 
+duplicated_iso3 <- duplicated(world$iso3)
+if (any(duplicated_iso3)) {
+  world <- world[!duplicated_iso3, ]
+}
+
+distinct_iso3 <- n_distinct(world$iso3)
+print(distinct_iso3)   # ok parfait, nous avons les 192!
+
+world <- world[, c("iso3", "outflow", "inflow", "CountryName", "deflactor", "lifeexp", "GDPpercapita_UN",
+                   "population", "FD", "politicalstability", "landlocked", "dummyEarthquake", "dummyStorm",
+                   "dummyFlood", "Events", "Fatalities", "conflictpercapita", "vulnerability", "prec_3days",
+                   "heat_wave", "dry_wave","Overall_Score", "Labor_Freedom", "geometry")]
+world
+
+# variable emigrates
+world$emigrates <- world$outflow / world$population
+# variable immigrates 
+world$immigrates <- world$inflow / world$population
+#  variable net
+world$net <- world$immigrates - world$emigrates
+summary(world)
+colnames(world)
+# S?lection des variables pour l'analyse de corr?lation
+selected_vars <- c("lifeexp", "GDPpercapita_UN", "deflactor", "population", "FD", "politicalstability", "landlocked", "Events", "Fatalities", "conflictpercapita", 
+                   "vulnerability", "prec_3days", "heat_wave", "dry_wave", "Overall_Score", "Labor_Freedom", 
+                   "emigrates", "immigrates", "net")
+data_corr <- world[, selected_vars]
+data_corr$geometry <- NULL
+correlation_matrix <- cor(data_corr, use = "complete.obs")
+#
+print(correlation_matrix)
+par(mfrow = c(1, 1))
+# graphique de la matrice de corr?lation
+corrplot(correlation_matrix, method = "circle", 
+         col = colorRampPalette(c("blue", "white", "red"))(20),
+         type = "upper", order = "hclust",
+         addCoefasPercent = TRUE,
+         tl.col = "black", tl.srt = 45,
+         addrect = 5)
+
+## Les graphiques des trois variables y
+par(mfrow = c(2, 2))
+
+mf_map(
+  x = world, var = "emigrates", type = "choro",
+  pal = "Red-Purple",  
+  breaks = "jenks",   
+  nbreaks = 8,         
+  leg_title = "Emigrates", 
+  leg_val_rnd = 3     
+)
+
+mf_map(
+  x = world, var = "immigrates", type = "choro",
+  pal = "Red-Purple", 
+  breaks = "jenks",   
+  nbreaks = 8,        
+  leg_title = "Immigrates",  
+  leg_val_rnd = 3     
+)
+
+mf_map(
+  x = world, var = "net", type = "choro",
+  pal = "Red-Purple",  
+  breaks = "jenks",    
+  nbreaks = 8,         
+  leg_title = "Net",  
+  leg_val_rnd = 3     
+)
+# Note: une diff?rence pa rapport ? la p?riode totale
+
+par(mfrow =c(1,2))
+# contiguity-based spatial weight matrix
+world_geo <- st_geometry(world)
+
+
+coords <- st_coordinates(st_centroid(world_geo))
+queen_nb <- poly2nb(world_geo, queen = TRUE)
+plot(world_geo)
+plot(queen_nb, coords, add = TRUE)
+
+addnbs <- function(world_geo, min_neighbours = 2) {
+  queen_nb <- poly2nb(world_geo, queen = TRUE)
+  count <- card(queen_nb)
+  if (all(count >= min_neighbours)) {
+    return(queen_nb)
+  }
+
+  nnbs <- knearneigh(st_coordinates(st_centroid(world_geo)), k = min_neighbours + 1)$nn
+  no_edges_from <- which(count < min_neighbours)
+  for (i in no_edges_from) {
+    queen_nb[[i]] <- nnbs[i, 2:(min_neighbours + 1)]
+  }
+  return(queen_nb)
+}
+
+world_nb <- addnbs(world_geo)
+world_nb
+plot(world_geo)
+plot(world_nb, coords, add = TRUE, col = "blue")
+world_listw <- nb2listw(world_nb, style = "W")
+W <- listw2mat(world_listw) 
+# Diagramme de dispersion de Moran
+par(mfrow = c(2,2))
+W_world <- nb2listw(world_nb)
+emigrates <- world$emigrates
+immigrates <- world$immigrates
+net <- world$net
+moran.plot(emigrates,W_world, labels = world$CountryName, col = c("red", "yellow", "blue", "pink"))
+moran.plot(immigrates,W_world, labels = world$CountryName, col = c("red", "yellow", "blue", "pink"))
+moran.plot(net,W_world, labels = world$CountryName, col = c("red", "yellow", "blue", "pink"))
+# Test de Moran
+moran_emigrates <- moran.test(world$emigrates, listw = world_listw)
+moran_emigrates
+moran_immigrates <- moran.test(world$immigrates, listw = world_listw)
+moran_immigrates
+moran_net <- moran.test(world$net, listw = world_listw)
+moran_net
+
+# OLS model for emigrates
+ols_emigrates <- lm(emigrates ~ lifeexp + GDPpercapita_UN + deflactor + population + FD + politicalstability + 
+                      landlocked + Events + Fatalities + conflictpercapita + vulnerability + prec_3days + heat_wave + 
+                      dry_wave + Labor_Freedom, data = world)
+
+summary(ols_emigrates)
+
+# OLS model for immigrates
+ols_immigrates <- lm(immigrates ~  GDPpercapita_UN + deflactor + population + FD + politicalstability + 
+                       landlocked + Events + Fatalities + conflictpercapita + vulnerability + prec_3days + heat_wave + 
+                       dry_wave + Labor_Freedom, data = world)
+
+summary(ols_immigrates)
+
+# Note :Une diff?rnce de r?sultats pour OLS
+# Moran test for spatial autocorrelation in residuals
+moran_test_emigrates <- moran.test(residuals(ols_emigrates), listw = world_listw)
+moran_test_immigrates <- moran.test(residuals(ols_immigrates), listw = world_listw)
+
+print("Moran's I test results for residuals of emigrates model:")
+print(moran_test_emigrates)
+print("Moran's I test results for residuals of immigrates model:")
+print(moran_test_immigrates)
+
+# Create Moran plots for residuals
+par(mfrow = c(1, 2))
+
+# Moran plot for residuals of immigrates model
+moran.plot(residuals(ols_immigrates), listw = world_listw, labels = world$CountryName,
+           main = "Moran Scatterplot - Residuals (Immigrates)")
+
+####### LISA cluster map for residuals of immigrates model
+
+library(tmap)
+# Mapping the local Moran's I
+localMI <- localmoran(residuals(ols_immigrates), listw = world_listw)
+dim(localMI)
+summary(localMI)
+world.localMI <- cbind(world,localMI)
+localMI.map <- tm_shape(world.localMI) +
+  tm_fill(col = "Ii", 
+          style = "pretty", 
+          title = "local moran statistics") +
+  tm_borders(alpha = 0.5)
+act_emigrates <-spatialreg::impacts(lag_emigrates, tr = trMatc)
+impact_emigrates
+impact_immigrates <-spatialreg::impacts(lag_immigrates, tr = trMatc)
+impact_immigrates
+
+
+
+
+
+# Mapping local Moran's I p-values
+pvalue.map <- tm_shape(world.localMI) +
+  tm_fill(col = "Pr.z....E.Ii..", 
+          breaks=c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+          palette="-Blues", 
+          title = "local Moran's I p-values") +
+  tm_borders(alpha = 0.5)
+
+# Mapping both local Moran's I values and p-values
+tmap_arrange(localMI.map, pvalue.map, asp=1, ncol=2)
+
+
+## Prepare te Lisa cluster Map
+# Define the quadrants based on Moran's I and significance
+quadrant <- rep(NA, nrow(localMI))
+DV <- residuals(ols_immigrates) - mean(residuals(ols_immigrates))
+C_mI <- localMI[,1] - mean(localMI[,1])
+signif <- 0.05
+
+quadrant[DV > 0 & C_mI > 0] <- "high-high"
+quadrant[DV < 0 & C_mI < 0] <- "low-low"
+quadrant[DV < 0 & C_mI > 0] <- "low-high"
+quadrant[DV > 0 & C_mI < 0] <- "high-low"
+quadrant[localMI[,5] > signif] <- "insignificant"
+
+# Build the LISA map with significance
+world.localMI$quadrant <- factor(quadrant, levels = c("low-low", "high-low", "low-high", "high-high", "insignificant"))
+colors <- c("#d7191c", "#fdae61", "#2c7bb6", "#abd9e9", "#ffffff")  # Red, Orange, Blue, Light Blue, White
+clusters <- c("Low-Low", "High-Low", "Low-High", "High-High", "Insignificant")
+
+# Create LISA cluster map with significance
+
+lisa_map_sig <- tm_shape(world.localMI) +
+  tm_fill(col = "quadrant", style = "cat", palette = colors, labels = clusters) +
+  tm_view(set.zoom.limits = c(11, 17)) +
+  tm_borders(alpha = 0.5)
+
+
+# Define the quadrants based on Moran's I and without significance
+quadrant <- rep(NA, nrow(localMI))
+DV <- residuals(ols_immigrates) - mean(residuals(ols_immigrates))
+C_mI <- localMI[,1] - mean(localMI[,1])
+
+quadrant[DV > 0 & C_mI > 0] <- "high-high"
+quadrant[DV < 0 & C_mI < 0] <- "low-low"
+quadrant[DV < 0 & C_mI > 0] <- "low-high"
+quadrant[DV > 0 & C_mI < 0] <- "high-low"
+
+# Build the LISA map without significance
+world.localMI$quadrant <- factor(quadrant, levels = c("low-low", "high-low", "low-high", "high-high"))
+colors <- c("#d7191c", "#fdae61", "#2c7bb6", "#abd9e9")  # Red, Orange, Blue, Light Blue
+clusters <- c("Low-Low", "High-Low", "Low-High", "High-High")
+
+# Create LISA cluster map without significance
+lisa_map_nonsig <- tm_shape(world.localMI) +
+  tm_fill(col = "quadrant", style = "cat", palette = colors, labels = clusters) +
+  tm_view(set.zoom.limits = c(11, 17)) +
+  tm_borders(alpha = 0.5)
+# Plot both maps
+par(mfrow = c(2, 1))
+lisa_map_sig 
+lisa_map_nonsig
+
+# NOte : graphiquement on peut constater une diff?rence dans les clusters de LISA
+
+
+###### LISA MAP FOR EMIGRATES
+
+# Calculate local Moran's I
+localMI <- localmoran(residuals(ols_emigrates), listw = world_listw)
+
+# Create a dataframe combining world data and local Moran's I
+world.localMI <- cbind(world, localMI)
+
+# Mapping the local Moran's I
+localMI.map <- tm_shape(world.localMI) +
+  tm_fill(col = "Ii", 
+          style = "pretty", 
+          title = "Local Moran Statistics") +
+  tm_borders(alpha = 0.5)
+
+# Mapping local Moran's I p-values
+pvalue.map <- tm_shape(world.localMI) +
+  tm_fill(col = "Pr.z....E.Ii..", 
+          breaks=c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+          palette="-Blues", 
+          title = "Local Moran's I p-values") +
+  tm_borders(alpha = 0.5)
+
+# Mapping both local Moran's I values and p-values
+tmap_arrange(localMI.map, pvalue.map, asp=1, ncol=2)
+
+## Prepare the LISA cluster Map
+# Define the quadrants based on Moran's I and significance
+quadrant <- rep(NA, nrow(localMI))
+DV <- residuals(ols_emigrates) - mean(residuals(ols_emigrates))
+C_mI <- localMI[,1] - mean(localMI[,1])
+signif <- 0.05
+
+quadrant[DV > 0 & C_mI > 0] <- "high-high"
+quadrant[DV < 0 & C_mI < 0] <- "low-low"
+quadrant[DV < 0 & C_mI > 0] <- "low-high"
+quadrant[DV > 0 & C_mI < 0] <- "high-low"
+quadrant[localMI[,5] > signif] <- "insignificant"
+
+# Build the LISA map with significance
+world.localMI$quadrant <- factor(quadrant, levels = c("low-low", "high-low", "low-high", "high-high", "insignificant"))
+colors <- c("#d7191c", "#fdae61", "#2c7bb6", "#abd9e9", "#ffffff")  # Red, Orange, Blue, Light Blue, White
+clusters <- c("Low-Low", "High-Low", "Low-High", "High-High", "Insignificant")
+
+# Create LISA cluster map with significance
+lisa_map_sig <- tm_shape(world.localMI) +
+  tm_fill(col = "quadrant", style = "cat", palette = colors, labels = clusters) +
+  tm_view(set.zoom.limits = c(11, 17)) +
+  tm_borders(alpha = 0.5)
+
+# Define the quadrants based on Moran's I without significance
+quadrant <- rep(NA, nrow(localMI))
+DV <- residuals(ols_emigrates) - mean(residuals(ols_emigrates))
+C_mI <- localMI[,1] - mean(localMI[,1])
+
+quadrant[DV > 0 & C_mI > 0] <- "high-high"
+quadrant[DV < 0 & C_mI < 0] <- "low-low"
+quadrant[DV < 0 & C_mI > 0] <- "low-high"
+quadrant[DV > 0 & C_mI < 0] <- "high-low"
+
+# Build the LISA map without significance
+world.localMI$quadrant <- factor(quadrant, levels = c("low-low", "high-low", "low-high", "high-high"))
+colors <- c("#d7191c", "#fdae61", "#2c7bb6", "#abd9e9")  # Red, Orange, Blue, Light Blue
+clusters <- c("Low-Low", "High-Low", "Low-High", "High-High")
+
+# Create LISA cluster map without significance
+lisa_map_nonsig <- tm_shape(world.localMI) +
+  tm_fill(col = "quadrant", style = "cat", palette = colors, labels = clusters) +
+  tm_view(set.zoom.limits = c(11, 17)) +
+  tm_borders(alpha = 0.5)
+
+# Plot both maps
+par(mfrow = c(2, 1))
+lisa_map_sig
+lisa_map_nonsig
+
+# Note: Meme  difference constee pour emigrates par rapport a la periode totale.
+
+
+
+```
+
+```{r}
+######## ESTIMATION 
+
+## MOdels OLS retenu
+# OLS model for emigrates
+ols_emigrates <- lm(emigrates ~ deflactor + FD + politicalstability + 
+                      landlocked + conflictpercapita + prec_3days + heat_wave + 
+                      dry_wave + Labor_Freedom, data = world)
+
+summary(ols_emigrates)
+# pas de significaton de ces variables ? 5% sauf  heat_wave ? 10%
+
+# OLS model for immigrates
+ols_immigrates <- lm(immigrates ~ deflactor + FD + politicalstability + 
+                       landlocked + conflictpercapita + prec_3days + heat_wave + 
+                       dry_wave + Labor_Freedom, data = world)
+
+summary(ols_immigrates)
+# pas de significaton de ces variables ? 5%
+
+### MODELS SLM
+
+# Calcul des lags 
+
+world$GDPpercapita_UN_lag <- lag.listw(world_listw, world$GDPpercapita_UN)
+world$deflactor_lag <- lag.listw(world_listw, world$deflactor)
+world$population_lag <- lag.listw(world_listw, world$population)
+world$FD_lag <- lag.listw(world_listw, world$FD)
+world$politicalstability_lag <- lag.listw(world_listw, world$politicalstability)
+world$landlocked_lag <- lag.listw(world_listw, world$landlocked)
+world$conflictpercapita_lag <- lag.listw(world_listw, world$conflictpercapita)
+world$prec_3days_lag <- lag.listw(world_listw, world$prec_3days)
+world$heat_wave_lag <- lag.listw(world_listw, world$heat_wave)
+world$dry_wave_lag <- lag.listw(world_listw, world$dry_wave)
+world$Labor_Freedom_lag <- lag.listw(world_listw, world$Labor_Freedom)
+
+
+# Modèle emigrates
+slx_emigrates <- lm(emigrates ~ deflactor+ FD + politicalstability + 
+                      landlocked + conflictpercapita + prec_3days + heat_wave + 
+                      dry_wave + Labor_Freedom + deflactor_lag + 
+                      FD_lag + politicalstability_lag + landlocked_lag + 
+                      conflictpercapita_lag + prec_3days_lag + heat_wave_lag + 
+                      dry_wave_lag + Labor_Freedom_lag, data = world)
+
+summary(slx_emigrates)
+
+# pas de signication de ces variables ni de leurs lags ? 5 %
+
+# Modèle immigrates
+slx_immigrates <- lm(immigrates ~ deflactor+ FD + politicalstability + 
+                       landlocked + conflictpercapita + prec_3days + heat_wave + 
+                       dry_wave + Labor_Freedom + deflactor_lag + 
+                       FD_lag + politicalstability_lag + landlocked_lag + 
+                       conflictpercapita_lag + prec_3days_lag + heat_wave_lag + 
+                       dry_wave_lag + Labor_Freedom_lag, data = world)
+
+summary(slx_immigrates)
+# pas de signication de ces variables ni de leurs lags ? 5 %
+
+
+```
+
+```{r}
+### MODELS SEM
+ev <- eigenw(world_listw)
+# emigrates
+sem_emigrates <- errorsarlm(emigrates ~deflactor + FD + politicalstability + 
+                              landlocked + conflictpercapita + prec_3days + heat_wave + 
+                              dry_wave + Labor_Freedom, data = world,world_listw,control=list(pre_eig=ev))
+
+
+summary(sem_emigrates)  
+
+# Note : Significative de lambda pour emigrates a 5% et pour les 3 tests mais 
+# pas de signication de ces variables  a 5 %
+
+
+# immigrates
+sem_immigrates <- errorsarlm(immigrates ~ deflactor + FD + politicalstability + 
+                               landlocked + conflictpercapita + prec_3days + heat_wave + 
+                               dry_wave + Labor_Freedom, data = world,world_listw,control=list(pre_eig=ev))
+
+
+summary(sem_immigrates)
+# Note: Par contre absence de  significatite de lambda pour immigrates
+# pas de signication de ces variables  a 5 %
+
+### MODELS LAG
+# emigrates
+lag_emigrates <- lagsarlm(emigrates ~ deflactor + FD + politicalstability + 
+                            landlocked + conflictpercapita + prec_3days + heat_wave + 
+                            dry_wave + Labor_Freedom, data = world,world_listw,control=list(pre_eig=ev))
+summary(lag_emigrates) # Note : Significative de rho pour emigrates mais 
+# pas de signication de ces variables  a 5 %  sauf heat_wave a 10 %
+
+
+# immigrates
+lag_immigrates <- lagsarlm(immigrates ~ deflactor + FD + politicalstability + 
+                             landlocked + conflictpercapita + prec_3days + heat_wave + 
+                             dry_wave + Labor_Freedom, data = world,world_listw,control=list(pre_eig=ev))
+summary(lag_immigrates)  # Note: Par contre pas de significativite de rho pour immigrates et 
+# pas de signication de ces variables  a 5 %
+
+
+### MODELS SDM
+# emigrates
+sdm_emigrates <- lagsarlm(emigrates ~ deflactor + FD + politicalstability + 
+                            landlocked + conflictpercapita + prec_3days + heat_wave + 
+                            dry_wave + Labor_Freedom, data = world, listw = world_listw, control=list(pre_eig=ev),Durbin = TRUE)
+
+summary(sdm_emigrates)
+# Note: Signification de rho mais pas de significativit?  du LM test for residual autocorrelation pour emigrates
+#  # pas de signication de ces variables  a 5 %
+
+
+# immigrates
+sdm_immigrates <- lagsarlm(immigrates ~ deflactor + FD + politicalstability + 
+                             landlocked + conflictpercapita + prec_3days + heat_wave + 
+                             dry_wave + Labor_Freedom, data = world, listw = world_listw, control=list(pre_eig=ev),Durbin = TRUE)
+
+summary(sdm_immigrates) #Note: par contre pas de Signification de rho ni  pas de signicativite pour le LM test for residual autocorrelation pour emigrates a 5%
+
+# Tableau emigrates 
+stargazer(ols_emigrates, slx_emigrates, sem_emigrates, lag_emigrates, sdm_emigrates, type = "text",
+          title = "Dependent variable: emigrates",
+          align = TRUE,
+          column.labels = c("ols_emigrates", "slx_emigrates", "sem_emigrates", "lag_emigrates", "sdm_emigrates"),
+          dep.var.labels.include = FALSE,
+          notes = c("Note: p<0.1; p<0.05; p<0.01"),
+          out = "regression_table_emigrates.txt")
+# Tableau immigrates
+
+stargazer(ols_immigrates, slx_immigrates, sem_immigrates, lag_immigrates, sdm_immigrates, type = "text",
+          title = "Dependent variable: immigrates",
+          align = TRUE,
+          column.labels = c("ols_immigrates", "slx_immigrates", "sem_immigrates", "lag_immigrates", "sdm_immigrates"),
+          dep.var.labels.include = FALSE,
+          notes = c("Note: p<0.1; p<0.05; p<0.01"),
+          out = "regression_table_immigrates.txt")
+
+
+
+## Comparaison des modèles 
+
+# Testing strategy
+res_test <- lm.LMtests(ols_immigrates, world_listw, test = "all")
+summary(res_test)  # on retient le modele OLS
+res_test <- lm.LMtests(ols_emigrates, world_listw, test = "all")
+summary(res_test) # on retient SEM
+
+# testing based on AIC
+
+c(ols = AIC(ols_emigrates), slx = AIC(slx_emigrates), sem = AIC(sem_emigrates) , lag = AIC(lag_emigrates),
+  sdm = AIC(sdm_emigrates))  # le meilleur selon AIC est SEM
+
+c(ols = AIC(ols_immigrates), slx = AIC(slx_immigrates), sem = AIC(sem_immigrates) , lag = AIC(lag_immigrates),
+  sdm = AIC(sdm_immigrates))  # le meilleur selon AIC est OLS pour immigrates
+
+#### Note genrale: Aucune significativit? des variables de changement climatique a 5%. On note une inverszion des bests 
+#mod?les pour emigrates et immigrates.
+```
+Note:
+During the time period from 1995 to 2000, none of the climate change-related variables had a statistically significant impact on migration. This contrasts with a longer time period (possibly from 1995 to the present) where some climate change variables do have a significant effect. Over this shorter time span, the impact of climate change on migration was not as pronounced as it is today, which may suggest that the influence of climate change on migration has become more prominent and significant in recent years.
+
+# 3/ BILATERAL MIGRATION FLOWS
+
+## merge the migration flow estimate that you have chosen in the first part of the project with explanatory variables.
+```{r, echo=FALSE}
+
+library(dplyr)
+
+# Extract unique iso3 values from the world dataframe
+unique_iso3 <- unique(world$iso3)
+
+# Filter the mig_data dataframe to retain rows where both the origin and dest values are in unique_iso3
+mig_data_filtered <- mig_data %>%
+  filter(origin %in% unique_iso3 & dest %in% unique_iso3)
+
+mig_data_filtered <- mig_data_filtered %>%
+  select(origin,dest,min_close)
+
+```
+
+```{r}
+
+
+# Creation of a  data frame containing only origin country features
+world_origin <- world %>%
+  select(iso3, deflactor, Labor_Freedom, FD, landlocked, dry_wave, heat_wave, politicalstability, conflictpercapita, prec_3days) %>%
+  rename_with(~ paste0("O_", .), -iso3)
+
+# Creation of a data frame containing only destination country features
+world_dest <- world %>%
+  select(iso3, deflactor, Labor_Freedom, FD, landlocked, dry_wave, heat_wave, politicalstability, conflictpercapita, prec_3days) %>%
+  rename_with(~ paste0("D_", .), -iso3)
+
+# Assume mig_data_filtered is a data frame containing origin and dest columns
+# Add explanatory variables for origin
+mig_data_filtered <- mig_data_filtered %>%
+  left_join(world_origin, by = c("origin" = "iso3"))
+
+# Add explanatory variables for destination
+data_od <- mig_data_filtered %>%
+  left_join(world_dest, by = c("dest" = "iso3"))
+
+head(data_od)
+```
+
+## Compute the distances between each pairs O-D
+
+```{r}
+
+# Calculate the centroids of each geometric shape
+world <- world %>% 
+  mutate(longitude = st_coordinates(st_centroid(geometry))[, 'X'],
+         latitude = st_coordinates(st_centroid(geometry))[, 'Y'])
+
+# Create the geometry dataframe
+geometry <- world %>% 
+  select(iso3, longitude, latitude)
+
+# Use of left_join to merge the longitude and latitude information
+
+# Merge longitude and latitude information for the destination
+data_od_dest <- data_od %>%
+  left_join(geometry, by = c("dest" = "iso3")) %>%
+  rename(dest_longitude = longitude, dest_latitude = latitude)
+
+# Merge longitude and latitude information for the origin
+data_od_complete <- data_od_dest %>%
+  left_join(geometry, by = c("origin" = "iso3")) %>%
+  rename(origin_longitude = longitude, origin_latitude = latitude)
+```
+
+
+```{r}
+# Create sf objects for the origin and destination points in the data_od dataframe
+origins <- st_as_sf(data_od_complete, coords = c("origin_longitude", "origin_latitude"), crs = 4326)
+destinations <- st_as_sf(data_od_complete, coords = c("dest_longitude", "dest_latitude"), crs = 4326)
+
+# Compute the distances between each pair of origin and destination points
+distances <- st_distance(origins, destinations, by_element = TRUE)
+
+# Merge the computed distances into the data_od_complete dataframe
+data_od_complete$distance <- as.numeric(distances)
+
+# Print the results to check if the distance column was successfully added
+print(data_od_complete)
+
+colnames(data_od_complete)
+
+```
+
+Note:The unit of 'Distance' is in meters.
+
+## Estimate a gravity model and comment on your results.
+
+```{r}
+data_od_complete$log_migration_flow <- log(data_od_complete$min_close + 1) # Adding 1 to avoid log(0)
+
+```
+
+
+```{r}
+
+data_od_complete$log_distance <- log(data_od_complete$distance + 1) # Same here
+
+gravity_model <- lm(log_migration_flow ~ log_distance + O_deflactor
++O_Labor_Freedom+O_FD+O_landlocked+O_dry_wave+O_heat_wave+O_politicalstability+O_conflictpercapita+O_prec_3days+D_deflactor+D_Labor_Freedom+D_FD+D_landlocked+D_dry_wave+D_heat_wave+D_politicalstability+D_conflictpercapita+D_prec_3days, data = data_od_complete)
+
+summary(gravity_model)
+
+
+```
+Note:
+
+The gravity model results demonstrate that both origin and destination characteristics significantly influence migration flows. Key predictors include financial development (O_FD and D_FD), political stability (O_politicalstability and D_politicalstability), and environmental factors (O_dry_wave, O_heat_wave, D_heat_wave). Financial development at both origin and destination strongly affects migration flows, with a particularly notable positive impact from the destination's financial development (D_FD). Political stability at the origin negatively impacts migration, suggesting that more politically stable countries experience lower emigration. Environmental factors such as dry and heat waves at the origin also significantly influence migration flows
+
+## Investigate whether there is spatial correlation in the residuals when they are aggregated at origin and destination level
+```{r}
+
+# Calculate residuals of the model
+data_od_complete$residuals <- residuals(gravity_model)
+
+# Summarize residuals for each country as origin
+origin_residuals_sum <- data_od_complete %>%
+  group_by(origin) %>%
+  summarise(sum_residuals_origin = sum(residuals))
+
+# Summarize residuals for each country as destination
+destination_residuals_sum <- data_od_complete %>%
+  group_by(dest) %>%
+  summarise(sum_residuals_dest = sum(residuals))
+
+```
+
+```{r}
+
+origin_residuals_vector <- origin_residuals_sum$sum_residuals_origin
+moran_res <- moran.test(origin_residuals_vector, listw = world_listw)
+
+print(moran_res)
+
+destination_residuals_vector <- destination_residuals_sum$sum_residuals_dest
+destination_moran <- moran.test(destination_residuals_vector, listw = world_listw)
+print(destination_moran)
+
+```
+Note:
+Spatial Autocorrelation in Residuals for Origins:
+
+The standard deviate of the Moran I statistic is -2.7389, with a p-value of 0.9969. This high p-value and negative standard deviate suggest that the spatial distribution of residuals for origins is close to random, exhibiting no significant spatial autocorrelation.
+Spatial Autocorrelation in Residuals for Destinations:
+
+The standard deviate of the Moran I statistic is -0.25371, with a p-value of 0.6001. Similarly, this indicates no significant spatial autocorrelation in the residuals for destinations, with their distribution also appearing random.
+Overall, these results indicate that, after accounting for variables in the model, there is no significant spatial autocorrelation in the residuals for either origins or destinations of migration flows. This may imply that the model has adequately captured the main factors affecting migration flows, with no additional information on spatial structures present in the residuals. It also suggests that migration patterns may be influenced by a variety of non-spatial factors, rather than directly by geographical proximity.
