@@ -1,0 +1,351 @@
+---
+title: "projet valeur extreme"
+output: html_document
+date: "2024-04-03"
+---
+
+# Projet de valeur extreme
+
+Eric Tadandjoa kolani
+
+Raphael PINAULT 21801579
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r library, echo=FALSE, attr.message=FALSE}
+
+library(quantmod)
+library(extRemes)
+library(evd)
+library(memisc)
+
+```
+
+## Introduction
+
+Nous souhaitons étudier les températures extremes dans les villes de Paris et de Toulouse.
+
+## Données
+
+You can also embed plots, for example:
+
+```{r data, echo=FALSE}
+
+setwd("C:/Users/33782/Desktop/cours_info/valeurs_extremes")
+
+
+## Base de Paris (Orly station)
+url1<- "TX_SOUID171643.txt"
+data_paris <- read.table(url1, skip = 21, header = TRUE,
+                   sep = ",", na.strings = -9999)
+
+## Base de Toulouse 
+url2 <-"TX_SOUID100104.txt"
+data_toulouse <- read.table(url2, skip = 21, header = TRUE,
+                         sep = ",", na.strings = -9999)
+
+##### Création des variables Year, Month pour la base Paris
+# variable Year
+data_paris$Year <- substr(data_paris$DATE, 1, 4)
+# variable Month
+data_paris$Month <- substr(data_paris$DATE, 5, 6)
+
+##### Création des variables Year, Month pour la base Toulouse
+# variable Year
+data_toulouse$Year <- substr(data_toulouse$DATE, 1, 4)
+# variable Month
+data_toulouse$Month <- substr(data_toulouse$DATE, 5, 6)
+
+```
+
+```{r traitement des valeurs manquantes}
+
+#### NOUS DEVONS GARDER LA MEME PERIODE POUR L'ANALYSE ####
+min(data_toulouse$Year) # 1947
+min(data_paris$Year) # 1921
+max(data_toulouse$Year) # 2024
+max(data_paris$Year) # 2024
+tail(data_paris) # Présence de NA
+tail(data_toulouse) # Présence de NA
+
+# Extraction des années avec des valeurs manquantes pour Paris
+years_with_na_paris <- unique(data_paris$Year[is.na(data_paris$TX)])
+
+print(paste("Années avec des valeurs manquantes pour Paris :", paste(years_with_na_paris, collapse=", ")))
+
+
+# Extraction des années avec des valeurs manquantes pour Toulouse
+years_with_na_toulouse <- unique(data_toulouse$Year[is.na(data_toulouse$TX)])
+print(paste("Années avec des valeurs manquantes pour Toulouse :", paste(years_with_na_toulouse, collapse=", ")))
+years_with_na_toulouse <- c(years_with_na_toulouse,1947, 1948) 
+years_with_na_paris <-c(1921:1946,years_with_na_toulouse)
+
+## Négation de %in%
+
+"%out%" <-Negate("%in%")
+# Nouvelle Base de Paris
+data_paris<- data_paris[data_paris$Year %out%(years_with_na_paris), ]
+
+# Nouvelle base de Toulouse
+data_toulouse <- data_toulouse[data_toulouse$Year %out% (years_with_na_toulouse), ]
+
+# Note : Super, mÃªme période pour l'analyse (verification ok pour le nombre d'observations 
+# communes : 26298)
+
+data_paris$TX <-data_paris$TX/10
+data_toulouse$TX <- data_toulouse$TX/10
+
+```
+
+## Analyse exploratoire
+
+```{r}
+
+# Données de température maximale à Paris
+
+summary(data_paris$TX)  # min = -10.8 et max = 41.9
+
+hist(data_paris$TX, main = "Distribution de la température maximale à Paris (Orly) \n entre 1921 et 2024", xlab = "Température maximale (°C)", ylab = "Nombre d'enregistrement")
+
+summary(data_paris)
+
+```
+
+```{r}
+
+# Analyse exploratoire des données de température maximale à Toulouse
+summary(data_toulouse$TX)  # min = -9.6 et max = 40.7
+
+hist(data_toulouse$TX, main = "Distribution de la température maximale à Toulouse \n de 1947 à 2024", xlab = "Température maximale (°C)", ylab="Nombre d'enregistrement")
+
+summary(data_toulouse)
+
+```
+
+```{r}
+
+# Comparaison des distributions des températures maximales entre Paris et Toulouse
+boxplot(data_paris$TX, data_toulouse$TX, names = c("Paris", "Toulouse"), 
+        main = "Comparaison des températures maximales entre Paris et Toulouse",
+        ylab = "Température maximale (0.1Â°C)")
+
+```
+
+```{r}
+
+# Test de Wilcoxon-Mann-Whitney pour évaluer les différences significatives
+wilcox.test(data_paris$TX, data_toulouse$TX) 
+
+```
+
+Les distributions de la températures entre les deux villes sont significativement différentes.
+
+## Préparation des données pour l'analyse des valeurs extremes
+
+```{r}
+
+## maximum annuel
+
+ann_max_paris <- aggregate(TX ~ Year, data = data_paris ,
+                     FUN = max, na.rm = TRUE)
+ann_max_toulouse <- aggregate(TX ~ Year, data = data_toulouse ,
+                              FUN = max, na.rm = TRUE)
+
+####### VISUALISATION DE L'EVOLUTION DES VALEURS EXTREMES ###
+
+# Maximum Annuel
+plot(ann_max_paris$Year, ann_max_paris$TX, type = "l", col = "blue", 
+     xlab = "Année", ylab = "Température maximale (0.1Â°C)",
+     main = "évolution des températures maximales annuelles")
+lines(ann_max_toulouse$Year, ann_max_toulouse$TX, type = "l", col = "red")
+legend("topleft", legend = c("Paris", "Toulouse"), col = c("blue", "red"), lty = 1)
+
+```
+
+## Etude des valeurs extremes
+
+### [**Première méthode : FGEV**]{.underline}
+
+#### [Paris]{.underline}
+
+```{r}
+
+fit_paris <- fgev(ann_max_paris$TX)
+fit_paris
+
+```
+
+```{r}
+
+par(mfrow = c(1, 3))
+
+plot(profile(fit_paris, which = "loc"))
+plot(profile(fit_paris, which = "scale"))
+plot(profile(fit_paris, which = "shape"))
+
+```
+
+```{r}
+
+# egale = 0 ?
+# Modèle restreint
+
+fitparis0 <- fgev(ann_max_paris$TX, shape = 0)
+fitparis0
+
+anova(fit_paris, fitparis0)
+AIC(fit_paris, fitparis0)
+
+```
+
+Pas de différence significative donc nous rejetons le modèle restreint (shape= 0).
+
+```{r}
+
+# est ce que la moyenne est mobile : tendance temporelle ?
+
+covar <- as.numeric(ann_max_paris$Year)/100
+ns_fit <- fgev(ann_max_paris$TX, nsloc = covar)
+ns_fit
+
+AIC(ns_fit, fit_paris,fitparis0)
+
+```
+
+Il semble que le trend est significative: Donc nous gardons toujours le modèle de base et on inclus le parametre de tendance.
+
+```{r}
+
+# qualité du modele : graphique ----
+par(mfrow = c(1, 1))
+
+pp(ns_fit, ci = TRUE, main = "PP Plot modèle de Paris", xlab = "Model", ylab = "Empirical")
+
+#interpretation
+
+a=rl(fit_paris, main="Niveau de retour pour les températures extrêmes à Paris", xlab="Période de retour", ylab="Température")
+
+```
+
+```{r}
+
+```
+
+#### [Toulouse]{.underline}
+
+```{r}
+
+fit_toulouse <- fgev(ann_max_toulouse$TX)
+fit_toulouse
+
+```
+
+```{r}
+
+par(mfrow = c(1, 3))
+
+plot(profile(fit_toulouse, which = "loc"))
+plot(profile(fit_toulouse, which = "scale"))
+plot(profile(fit_toulouse, which = "shape"))
+
+```
+
+```{r}
+
+# egale = 0 ?
+# Modèle restreint
+
+fittoulouse0 <- fgev(ann_max_toulouse$TX, shape = 0)
+fittoulouse0
+
+anova(fit_toulouse, fittoulouse0)
+AIC(fit_toulouse, fittoulouse0)
+
+# Pas de différence significative donc nous retons le modèle restreint (shape= 0)
+
+```
+
+```{r}
+# est ce que la moyenne est mobile : tendance temporelle ?
+
+covar <- as.numeric(ann_max_toulouse$Year) / 100
+ns_fit <- fgev(ann_max_toulouse$TX,nsloc = covar)
+ns_fit
+
+anova(ns_fit, fittoulouse0)
+AIC(ns_fit, fit_toulouse,fittoulouse0) 
+
+# Il semble que le trend est significative: Donc nous gardons toujours le modèle restreint (shape= 0 mais on inclus le trend)
+
+```
+
+```{r}
+
+# qualité du modele : graphique ----
+par(mfrow = c(1, 1))
+
+pp(ns_fit, ci = TRUE, main = "PP Plot modèle de Toulouse", xlab = "Model", ylab = "Empirical")
+
+#interpretation
+
+b=rl(fit_toulouse, main="Niveau de retour pour les températures extrêmes de Toulouse", xlab= "période de retour", ylab="Température")
+```
+
+```{r}
+
+plot(ns_fit)
+```
+
+Pour rappel nous étudions des extremas annuels.
+
+### [**Deuxieme méthode : FPOT**]{.underline}
+
+#### [Toulouse]{.underline}
+
+```{r}
+
+a <- log(data_toulouse[data_toulouse$TX > 1,]$TX)
+
+plot(a)
+
+par(mfrow = c(2, 1))
+
+mrlplot(a, c(3.2, 3.7))
+
+tcplot(a, c(3.2, 3.7),std.err = FALSE)
+
+```
+
+```{r}
+
+# intervalle 3.45 et  à 3.55 basé sur les deux (tcplot et mrlplot)
+thresh <- 3.52
+# choix final de 3.52
+fit_pot <- fpot(a, thresh, npp = 365)
+fit_pot
+#Est-ce que notre modèle est bon ou pas ?
+
+par(mfrow = c(1, 1))
+plot(fit_pot)
+
+```
+
+```{r}
+
+fit_pot0 <- fpot(a, thresh, npp = 365, shape=0)
+fit_pot0
+anova(fit_pot, fit_pot0)  # on retient fit_pot
+AIC(fit_pot, fit_pot0)
+
+```
+
+Test rapport de vraisemblance ou AIC montre qu'on retient fit_pot donc les deux paramètres.
+
+```{r}
+
+## Intervalle de confiance
+confint(fit_pot)
+
+```
